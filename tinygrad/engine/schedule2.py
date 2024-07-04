@@ -13,10 +13,8 @@ from tinygrad.shape.symbolic import Variable
 def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tuple[LazyOp, List[LazyBuffer]]:
   if out.op in {LoadOps.CUSTOM, LoadOps.COPY, LoadOps.EMPTY, LoadOps.VIEW}: return LazyOp(out.op, (), out.arg), list(out.srcs)
   inputs: List[LazyBuffer] = []
-  output_st = out.st
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer, st:ShapeTracker):
-    nonlocal output_st
     if x != x.base:
       st = x.st + st
       x = x.base
@@ -26,11 +24,10 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
       inputs.append(x)
       return LazyOp(BufferOps.LOAD, (), MemBuffer(len(inputs), x.dtype, st))
     if x.op in ReduceOps:
-      assert st.contiguous, "ReduceOps late fusion must be contiguous"
-      output_st = st
+      assert x is out, f"{x} != {out}"
       st = ShapeTracker.from_shape(x.srcs[0].shape)
     lop = _dfs(x.srcs[0], st) if x.op in {LoadOps.CONTIGUOUS, LoadOps.ASSIGN} else LazyOp(cast(Op, x.op), tuple(_dfs(s, st) for s in x.srcs), x.arg)
-    if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, output_st))
+    if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, x.st))
     return lop
   return _dfs(out, out.st), inputs
 
@@ -38,12 +35,12 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
   global_stores = {x.base:None for x in outs if x.base.op is not LoadOps.CONST and x.base.realized is None}
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer):
-    if x.base.realized is not None: return
+    if x.base.realized is not None or x.base.op is LoadOps.CONST: return
     if x is not x.base:
-      if prod(x.base.shape) < prod(x.shape) and x.base.op is not LoadOps.CONST: return global_stores.setdefault(x.base, None)
+      if prod(x.base.shape) < prod(x.shape): return global_stores.setdefault(x.base, None)
       return _dfs(x.base)
     for s in x.srcs: _dfs(s)
-    if (x.op in LoadOps or x.forced_realize) and x.op is not LoadOps.CONST: global_stores.setdefault(x, None)
+    if x.op in LoadOps or x.forced_realize: global_stores.setdefault(x, None)
     if x.op in ReduceOps: global_stores.setdefault(x, None)
   for x in outs: _dfs(x)
 
@@ -64,8 +61,8 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
     del n.srcs
     lop, inputs = rev_children[n]
     if DEBUG >= 3:
-      print_tree(lop)
       print("---")
+      print_tree(lop)
     schedule.append(ScheduleItem((lop, ), (n.buffer, )+tuple(x.buffer for x in inputs)))
     for x in children[n]:
       in_degree[x] -= 1
