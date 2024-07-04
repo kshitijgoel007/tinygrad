@@ -13,7 +13,6 @@ from tinygrad.shape.symbolic import Variable
 def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tuple[LazyOp, List[LazyBuffer]]:
   if out.op in {LoadOps.CUSTOM, LoadOps.COPY, LoadOps.EMPTY, LoadOps.VIEW}: return LazyOp(out.op, (), out.arg), list(out.srcs)
   inputs: Dict[LazyBuffer, int] = {}
-  output_st = ShapeTracker.from_shape(out.shape)
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer, st:ShapeTracker):
     nonlocal output_st
@@ -25,17 +24,17 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
       return LazyOp(BufferOps.LOAD, (), MemBuffer(inputs.setdefault(x, len(inputs)+1), x.dtype, st))
     if x.op in ReduceOps:
       assert x is out, f"{x} != {out}"
-      output_st = ShapeTracker.from_shape(x.shape)
+      output_st = x.st
       st = ShapeTracker.from_shape(x.srcs[0].shape)
     if x.op is LoadOps.ASSIGN:
       assert x is out
       assert x.srcs[1].base is x.srcs[1], "assign must be to base"
       assert x.srcs[1].realized is not None, f"assign must be already realized to schedule {x.srcs[1]}"
-      output_st = out.arg[0]
+      if len(out.arg) != 0: output_st = cast(ShapeTracker, out.arg[0])
     lop = _dfs(x.srcs[0], st) if x.op in {LoadOps.CONTIGUOUS, LoadOps.ASSIGN} else LazyOp(cast(Op, x.op), tuple(_dfs(s, st) for s in x.srcs), x.arg)
     if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, output_st))
     return lop
-  return _dfs(out, out.st), list(inputs)
+  return _dfs(out, output_st:=out.st), list(inputs)
 
 def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
   global_stores = {x.base:None for x in outs if x.base.op is not LoadOps.CONST and x.base.realized is None}

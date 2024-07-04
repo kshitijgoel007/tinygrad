@@ -80,7 +80,7 @@ class LazyBuffer:
 
   def assign(self, x:LazyBuffer) -> LazyBuffer:
     assert x.size == self.size, f"assign target must have same size {self.size=} != {x.size=}"
-    return LazyBuffer.loadop(LoadOps.ASSIGN, self.shape, self.dtype, self.device, arg=() if self.st.contiguous else (self.st,), src=(x, self.base))
+    return LazyBuffer.loadop(LoadOps.ASSIGN, self.shape, self.dtype, self.device, arg=() if self.st.contiguous else (self.st,), src=(x, self.base)) # TODO: arg is always (st,) ?
 
   def can_view(self): return self.st.consecutive and not self.is_unrealized_const() and self.device.split(":")[0] in view_supported_devices
 
