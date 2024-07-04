@@ -2,7 +2,6 @@ from collections import defaultdict
 import functools
 from typing import DefaultDict, Dict, List, Tuple, cast
 
-from tinygrad.engine.graph import print_tree
 from tinygrad.engine.schedule import ScheduleItem
 from tinygrad.helpers import DEBUG, prod
 from tinygrad.lazy import LazyBuffer
@@ -24,6 +23,7 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
     if x.op in ReduceOps:
       assert x is out, f"{x} != {out}"
       st = ShapeTracker.from_shape(x.srcs[0].shape)
+    assert x.op is not LoadOps.ASSIGN, f"TODO"
     lop = _dfs(x.srcs[0], st) if x.op in {LoadOps.CONTIGUOUS, LoadOps.ASSIGN} else LazyOp(cast(Op, x.op), tuple(_dfs(s, st) for s in x.srcs), x.arg)
     if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, x.st))
     return lop
@@ -43,6 +43,7 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
   for x in outs: _dfs(x)
 
   rev_children = {x:lower_lazybuffer(x, global_stores) for x in global_stores}
+  # *** TODO: graph rewrite asts in rev_children
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
   in_degree: DefaultDict[LazyBuffer, int] = defaultdict(int)
   for buf, (_, inputs) in rev_children.items():

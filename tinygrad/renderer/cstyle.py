@@ -176,7 +176,9 @@ class CStyleLanguage(Renderer):
           r[u] = (r[src[0]] if from_ssa else f"{(r[src[0]])}") + (f"[{args}]" if src[0].dtype.count > 4 else f".{'xyzw'[args]}")
         else: raise RuntimeError(f"failed to render {u}")
 
-    return self.render_kernel(name, kernel, bufs, uops)
+    k = self.render_kernel(name, kernel, bufs, uops)
+    if getenv("PRINT_KERNEL"): print(k)
+    return k
 
 class ClangRenderer(CStyleLanguage):
   device = "CLANG"
