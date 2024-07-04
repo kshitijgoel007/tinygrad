@@ -2,8 +2,9 @@ from collections import defaultdict
 import functools
 from typing import DefaultDict, Dict, List, Tuple, cast
 
+from tinygrad.engine.graph import print_tree
 from tinygrad.engine.schedule import ScheduleItem
-from tinygrad.helpers import DEBUG, prod
+from tinygrad.helpers import DEBUG, colored, prod
 from tinygrad.lazy import LazyBuffer
 from tinygrad.ops import BufferOps, ConstBuffer, LazyOp, LoadOps, MemBuffer, Op, ReduceOps
 from tinygrad.shape.shapetracker import ShapeTracker
@@ -12,8 +13,10 @@ from tinygrad.shape.symbolic import Variable
 def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tuple[LazyOp, List[LazyBuffer]]:
   if out.op in {LoadOps.CUSTOM, LoadOps.COPY, LoadOps.EMPTY, LoadOps.VIEW}: return LazyOp(out.op, (), out.arg), list(out.srcs)
   inputs: Dict[LazyBuffer, int] = {}
+  output_st = ShapeTracker.from_shape(out.shape)
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer, st:ShapeTracker):
+    nonlocal output_st
     if x != x.base:
       st = x.st + st
       x = x.base
@@ -22,10 +25,15 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
       return LazyOp(BufferOps.LOAD, (), MemBuffer(inputs.setdefault(x, len(inputs)+1), x.dtype, st))
     if x.op in ReduceOps:
       assert x is out, f"{x} != {out}"
+      output_st = ShapeTracker.from_shape(x.shape)
       st = ShapeTracker.from_shape(x.srcs[0].shape)
-    assert x.op is not LoadOps.ASSIGN, f"TODO"
+    if x.op is LoadOps.ASSIGN:
+      assert x is out
+      assert x.srcs[1].base is x.srcs[1], "assign must be to base"
+      assert x.srcs[1].realized is not None, f"assign must be already realized to schedule {x.srcs[1]}"
+      output_st = out.arg[0]
     lop = _dfs(x.srcs[0], st) if x.op in {LoadOps.CONTIGUOUS, LoadOps.ASSIGN} else LazyOp(cast(Op, x.op), tuple(_dfs(s, st) for s in x.srcs), x.arg)
-    if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, x.st))
+    if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, output_st))
     return lop
   return _dfs(out, out.st), list(inputs)
 
@@ -59,6 +67,10 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
     n = queue.pop(0)
     del n.srcs
     lop, inputs = rev_children[n]
+    if DEBUG >= 4:
+      print(colored(n, "green"))
+      print_tree(lop)
+      print("--")
     schedule.append(ScheduleItem((lop, ), (n.buffer, )+tuple(x.buffer for x in inputs)))
     for x in children[n]:
       in_degree[x] -= 1
