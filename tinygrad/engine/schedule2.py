@@ -23,7 +23,10 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
       assert x not in inputs
       inputs.append(x)
       return LazyOp(BufferOps.LOAD, (), MemBuffer(len(inputs), x.dtype, st))
-    lop = LazyOp(cast(Op, x.op), tuple(_dfs(s, st) for s in x.srcs), x.arg)
+    if x.op is LoadOps.CONTIGUOUS:
+      assert x is out
+      lop = _dfs(x.srcs[0], st)
+    else: lop = LazyOp(cast(Op, x.op), tuple(_dfs(s, st) for s in x.srcs), x.arg)
     if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, st))
     return lop
   return _dfs(out, out.st), inputs
@@ -38,7 +41,6 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
       return _dfs(x.base)
     for s in x.srcs: _dfs(s)
     if (x.op in LoadOps or x.forced_realize) and x.op is not LoadOps.CONST: global_stores.setdefault(x, None)
-    if x.op in ReduceOps: global_stores.setdefault(x, None)
   for x in outs: _dfs(x)
 
   rev_children = {x:lower_lazybuffer(x, global_stores) for x in global_stores}
