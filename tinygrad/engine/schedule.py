@@ -201,9 +201,6 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs:
     if r.op not in ReduceOps or r in realizes: continue
-    # NOTE: this makes TestIndexing.test_int_assignment fail?
-    realizes[r] = None
-    continue
 
     group: Set[LazyBuffer] = set()
     _recursive_group(r, r.st, r, children, realizes, reduce_for_op, group)
@@ -307,8 +304,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
   kernel_number = GlobalCounters.kernel_count
   while queue:
     ps = queue.popleft()
-    if ps.ast[0].op not in LoadOps:
-      print(ps.outputs[0].st, ps.ast[0].arg.st)
+    if getenv("DEBUG_TOPOSORT"): print(ps.outputs[0])
     for buf in ps.outputs: seen.add(buf)
     if GRAPH:
       kernel_number += 1

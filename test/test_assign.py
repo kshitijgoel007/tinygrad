@@ -207,7 +207,7 @@ class TestAssign(unittest.TestCase):
       c = a+9
       a += b
       b += c
-      Tensor.realize(a,b)
+      Tensor.realize(a, b)
       np.testing.assert_allclose(a.numpy(), 2+3)
       np.testing.assert_allclose(b.numpy(), 3+2+9)
 
@@ -256,7 +256,7 @@ class TestAssign(unittest.TestCase):
     b.realize()
     ba1 = a.lazydata.base.realized
     bb1 = b.lazydata.base.realized
-    with self.assertRaises((RuntimeError, AssertionError)):
+    with self.assertRaisesRegex(RuntimeError, "contiguous"):
       a = a.permute(1,0)
       a += b
       a.realize()

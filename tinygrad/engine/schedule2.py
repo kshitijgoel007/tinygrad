@@ -4,7 +4,7 @@ from typing import DefaultDict, Dict, List, Tuple, cast
 
 from tinygrad.engine.graph import print_tree
 from tinygrad.engine.schedule import ScheduleItem
-from tinygrad.helpers import DEBUG, colored, prod
+from tinygrad.helpers import DEBUG, colored, getenv, prod
 from tinygrad.lazy import LazyBuffer
 from tinygrad.ops import BufferOps, ConstBuffer, LazyOp, LoadOps, MemBuffer, Op, ReduceOps
 from tinygrad.shape.shapetracker import ShapeTracker
@@ -38,7 +38,7 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
   return _dfs(out, output_st:=out.st), list(inputs)
 
 def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
-  if DEBUG >= 2: print(colored(f"scheduling {outs}", "green"))
+  if DEBUG >= 3: print(colored(f"scheduling {outs}", "yellow"))
   global_stores = {x.base:None for x in outs if x.base.op is not LoadOps.CONST and x.base.realized is None}
   assign_targets: Dict[LazyBuffer, LazyBuffer] = {}
   @functools.lru_cache(None)
@@ -63,7 +63,7 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
       if x in assign_targets and assign_targets[x] is not buf:
         children[buf][assign_targets[x]] = None
         in_degree[assign_targets[x]] += 1
-      if x.realized is None:
+      elif x.realized is None:
         children[x][buf] = None
         in_degree[buf] += 1
 
@@ -71,10 +71,10 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
   schedule: List[ScheduleItem] = []
   while queue:
     n = queue.pop(0)
+    if getenv("DEBUG_TOPOSORT"): print(colored(n, "green"))
     del n.srcs
     lop, inputs = rev_children[n]
     if DEBUG >= 4:
-      print(colored(n, "green"))
       print_tree(lop)
       print("--")
     schedule.append(ScheduleItem((lop, ), (n.buffer, )+tuple(x.buffer for x in inputs)))
@@ -82,6 +82,6 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
 
-  if len(schedule) != len(global_stores): raise RuntimeError(f"cycle detected in graph {len(schedule)} != {len(global_stores)}")
+  if len(schedule) != len(global_stores) or any(d != 0 for d in in_degree.values()): raise RuntimeError(f"cycle detected in graph {len(schedule)} != {len(global_stores)}")
   if DEBUG >= 1 and len(schedule) >= 10: print(f"scheduled {len(schedule)} kernels")
   return schedule, {}
