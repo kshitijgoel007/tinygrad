@@ -32,7 +32,7 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
   return _dfs(out, out.st), inputs
 
 def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
-  global_stores = {x:None for x in outs if x.op is not LoadOps.CONST}
+  global_stores = {x.base:None for x in outs if x.base.op is not LoadOps.CONST and x.base.realized is None}
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer):
     if x.base.realized is not None: return
