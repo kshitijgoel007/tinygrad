@@ -20,6 +20,7 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
       st = x.st + st
       x = x.base
     if x.op is LoadOps.CONST: return LazyOp(BufferOps.CONST, (), ConstBuffer(x.arg, x.dtype, st))
+    if out.op is LoadOps.ASSIGN and x is out.srcs[1]: return LazyOp(BufferOps.LOAD, (), MemBuffer(0, x.dtype, st))
     if x is not out and (x in global_stores or x.realized is not None):
       return LazyOp(BufferOps.LOAD, (), MemBuffer(inputs.setdefault(x, len(inputs)+1), x.dtype, st))
     if x.op in ReduceOps:
@@ -37,7 +38,9 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
   return _dfs(out, output_st:=out.st), list(inputs)
 
 def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
+  if DEBUG >= 2: print(colored(f"scheduling {outs}", "green"))
   global_stores = {x.base:None for x in outs if x.base.op is not LoadOps.CONST and x.base.realized is None}
+  assign_targets: Dict[LazyBuffer, LazyBuffer] = {}
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer):
     if x.base.realized is not None or x.base.op is LoadOps.CONST: return
@@ -47,6 +50,7 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
     for s in x.srcs: _dfs(s)
     if x.op in LoadOps or x.forced_realize: global_stores[x] = None
     if x.op in ReduceOps: global_stores[x] = None
+    if x.op is LoadOps.ASSIGN: assign_targets[x.srcs[1]] = x
   for x in outs: _dfs(x)
 
   rev_children = {x:lower_lazybuffer(x, global_stores) for x in global_stores}
@@ -56,9 +60,12 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
   for buf, (_, inputs) in rev_children.items():
     in_degree[buf] = 0
     for x in inputs:
-      if x.realized is not None: continue
-      children[x][buf] = None
-      in_degree[buf] += 1
+      if x in assign_targets and assign_targets[x] is not buf:
+        children[buf][assign_targets[x]] = None
+        in_degree[assign_targets[x]] += 1
+      if x.realized is None:
+        children[x][buf] = None
+        in_degree[buf] += 1
 
   queue = [x for x in global_stores if in_degree[x] == 0]
   schedule: List[ScheduleItem] = []
@@ -75,6 +82,6 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
 
-  assert len(schedule) == len(global_stores), f"{len(schedule)} != {len(global_stores)}"
+  if len(schedule) != len(global_stores): raise RuntimeError(f"cycle detected in graph {len(schedule)} != {len(global_stores)}")
   if DEBUG >= 1 and len(schedule) >= 10: print(f"scheduled {len(schedule)} kernels")
   return schedule, {}
