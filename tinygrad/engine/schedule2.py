@@ -13,8 +13,10 @@ from tinygrad.shape.symbolic import Variable
 def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tuple[LazyOp, List[LazyBuffer]]:
   if out.op in {LoadOps.CUSTOM, LoadOps.COPY, LoadOps.EMPTY, LoadOps.VIEW}: return LazyOp(out.op, (), out.arg), list(out.srcs)
   inputs: List[LazyBuffer] = []
+  output_st = out.st
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer, st:ShapeTracker):
+    nonlocal output_st
     if x != x.base:
       st = x.st + st
       x = x.base
@@ -23,11 +25,12 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
       assert x not in inputs
       inputs.append(x)
       return LazyOp(BufferOps.LOAD, (), MemBuffer(len(inputs), x.dtype, st))
-    if x.op is LoadOps.CONTIGUOUS:
-      assert x is out
-      lop = _dfs(x.srcs[0], st)
-    else: lop = LazyOp(cast(Op, x.op), tuple(_dfs(s, st) for s in x.srcs), x.arg)
-    if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, st))
+    if x.op in ReduceOps:
+      assert st.contiguous, "ReduceOps late fusion must be contiguous"
+      output_st = st
+      st = ShapeTracker.from_shape(x.srcs[0].shape)
+    lop = _dfs(x.srcs[0], st) if x.op in {LoadOps.CONTIGUOUS, LoadOps.ASSIGN} else LazyOp(cast(Op, x.op), tuple(_dfs(s, st) for s in x.srcs), x.arg)
+    if x is out: lop = LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, output_st))
     return lop
   return _dfs(out, out.st), inputs
 
@@ -41,6 +44,7 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
       return _dfs(x.base)
     for s in x.srcs: _dfs(s)
     if (x.op in LoadOps or x.forced_realize) and x.op is not LoadOps.CONST: global_stores.setdefault(x, None)
+    if x.op in ReduceOps: global_stores.setdefault(x, None)
   for x in outs: _dfs(x)
 
   rev_children = {x:lower_lazybuffer(x, global_stores) for x in global_stores}
