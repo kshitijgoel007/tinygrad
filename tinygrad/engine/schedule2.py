@@ -2,8 +2,9 @@ from collections import defaultdict
 import functools
 from typing import DefaultDict, Dict, List, Tuple, cast
 
+from tinygrad.engine.graph import print_tree
 from tinygrad.engine.schedule import ScheduleItem
-from tinygrad.helpers import prod
+from tinygrad.helpers import DEBUG, prod
 from tinygrad.lazy import LazyBuffer
 from tinygrad.ops import BufferOps, ConstBuffer, LazyOp, LoadOps, MemBuffer, Op, ReduceOps
 from tinygrad.shape.shapetracker import ShapeTracker
@@ -15,7 +16,7 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer, st:ShapeTracker):
     if x != x.base:
-      st = st + x.base.st
+      st = x.st + st
       x = x.base
     if x.op is LoadOps.CONST: return LazyOp(BufferOps.CONST, (), ConstBuffer(x.arg, x.dtype, st))
     if x is not out and (x in global_stores or x.realized is not None):
@@ -28,15 +29,15 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
   return _dfs(out, out.st), inputs
 
 def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
-  global_stores = {x:None for x in outs}
+  global_stores = {x:None for x in outs if x.op is not LoadOps.CONST}
   @functools.lru_cache(None)
   def _dfs(x:LazyBuffer):
     if x.base.realized is not None: return
     if x is not x.base:
-      if prod(x.base.shape) < prod(x.shape): return global_stores.setdefault(x, None)
+      if prod(x.base.shape) < prod(x.shape) and x.base.op is not LoadOps.CONST: return global_stores.setdefault(x.base, None)
       return _dfs(x.base)
     for s in x.srcs: _dfs(s)
-    if x.op in LoadOps or x.forced_realize: global_stores.setdefault(x, None)
+    if (x.op in LoadOps or x.forced_realize) and x.op is not LoadOps.CONST: global_stores.setdefault(x, None)
     if x.op in ReduceOps: global_stores.setdefault(x, None)
   for x in outs: _dfs(x)
 
@@ -56,6 +57,9 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
     n = queue.pop(0)
     del n.srcs
     lop, inputs = rev_children[n]
+    if DEBUG >= 3:
+      print_tree(lop)
+      print("---")
     schedule.append(ScheduleItem((lop, ), (n.buffer, )+tuple(x.buffer for x in inputs)))
     for x in children[n]:
       in_degree[x] -= 1
