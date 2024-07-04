@@ -37,11 +37,11 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
   def _dfs(x:LazyBuffer):
     if x.base.realized is not None or x.base.op is LoadOps.CONST: return
     if x is not x.base:
-      if prod(x.base.shape) < prod(x.shape): return global_stores.setdefault(x.base, None)
+      if prod(x.base.shape) < prod(x.shape): global_stores[x.base] = None
       return _dfs(x.base)
     for s in x.srcs: _dfs(s)
-    if x.op in LoadOps or x.forced_realize: global_stores.setdefault(x, None)
-    if x.op in ReduceOps: global_stores.setdefault(x, None)
+    if x.op in LoadOps or x.forced_realize: global_stores[x] = None
+    if x.op in ReduceOps: global_stores[x] = None
   for x in outs: _dfs(x)
 
   rev_children = {x:lower_lazybuffer(x, global_stores) for x in global_stores}
