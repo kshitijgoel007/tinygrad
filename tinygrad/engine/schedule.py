@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict, Union, get_args
 from tinygrad.ops import LoadOps, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
-from tinygrad.engine.graph import log_lazybuffer, print_tree, realized_lazybuffer
+from tinygrad.engine.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, colored, prod, dedup, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ConstType, ImageDType, dtypes, DType

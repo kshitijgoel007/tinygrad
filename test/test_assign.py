@@ -207,7 +207,7 @@ class TestAssign(unittest.TestCase):
       c = a+9
       a += b
       b += c
-      Tensor.realize(a, b)
+      Tensor.realize(a,b)
       np.testing.assert_allclose(a.numpy(), 2+3)
       np.testing.assert_allclose(b.numpy(), 3+2+9)
 
