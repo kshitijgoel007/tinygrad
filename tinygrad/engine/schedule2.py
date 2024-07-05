@@ -1,12 +1,16 @@
+from __future__ import annotations
 from collections import defaultdict
+from dataclasses import dataclass
+from enum import Enum, EnumType
 import functools
-from typing import DefaultDict, Dict, List, Tuple, cast
+import itertools
+from typing import Any, Callable, DefaultDict, Dict, List, Literal, Optional, Set, Tuple, TypeVar, Union, cast
 
 from tinygrad.engine.graph import print_tree
 from tinygrad.engine.schedule import ScheduleItem
 from tinygrad.helpers import DEBUG, colored, getenv, prod
 from tinygrad.lazy import LazyBuffer
-from tinygrad.ops import BufferOps, ConstBuffer, LazyOp, LoadOps, MemBuffer, Op, ReduceOps
+from tinygrad.ops import BinaryOps, BufferOps, ConstBuffer, LazyOp, LoadOps, MemBuffer, Op, ReduceOps, TernaryOps, UnaryOps
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.symbolic import Variable
 
@@ -37,6 +41,39 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
     return lop
   return _dfs(out, output_st:=out.st), list(inputs)
 
+@dataclass(frozen=True)
+class OpPat:
+  op: Optional[EnumType|Set[EnumType]] = None
+  name: Optional[str] = None
+  children: Optional[OpPat] = None
+  #parents: Optional[OpPat] = None
+
+class PatternMatcher:
+  def __init__(self, patterns:List[Tuple[OpPat, Callable]], children:DefaultDict[LazyBuffer, Dict[LazyBuffer, None]], rev_children:Dict[LazyBuffer, Tuple[LazyOp, List[LazyBuffer]]]):
+    self.patterns, self.children, self.rev_children = patterns, children, rev_children
+  def rewrite(self, op:LazyBuffer) -> Optional[LazyBuffer]:
+    for p,fxn in self.patterns:
+      store: Dict[str, LazyBuffer] = {}
+      if _match(op, p, store) and (ret:=fxn(**store)) is not None: return ret  # NOTE: if it returns None, we keep trying to match
+    return None
+
+def _fuse_elementwise_child(r:LazyBuffer, e:LazyBuffer, ctx:PatternMatcher):
+  output_st = r.st
+  inputs = set(ctx.rev_children[r][1]).union(filter(lambda x: x is not r, ctx.rev_children[e][1]))
+  def _replace(x:LazyOp):
+    src = tuple(map(_replace, x.src))
+    print(src)
+
+  raise Exception(output_st)
+
+elementwise_ops = {UnaryOps, BinaryOps, TernaryOps}
+kernel_fusion = [
+    (OpPat(ReduceOps, "r", children=OpPat(elementwise_ops, "e"), ), lambda r,e,ctx: _fuse_elementwise_child(r, e, ctx)),
+]
+
+def graph_rewrite(store:LazyOp, pm:PatternMatcher):
+  raise Exception(store)
+
 def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
   if DEBUG >= 3: print(colored(f"scheduling {outs}", "yellow"))
   global_stores = {x.base:None for x in outs if x.base.op is not LoadOps.CONST and x.base.realized is None}
@@ -66,6 +103,26 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
       elif x.realized is None:
         children[x][buf] = None
         in_degree[buf] += 1
+
+  def _match(op:LazyBuffer, children:DefaultDict[LazyBuffer, Dict[LazyBuffer, None]], pat:OpPat, store:Dict[str, LazyBuffer]) -> bool:
+    if pat.name is not None and store.setdefault(pat.name, op) is not op: return False
+    if pat.op is not None and (not any(op.op in opset for opset in pat.op) if isinstance(pat.op, set) else op.op not in pat.op): return False
+    if pat.children is None: return True
+    #for x in children[op]: print(_match(x, children, pat.children, store))
+    new_store = store.copy()
+    if all(_match(x, children, pat.children, store) for x in children[op]):
+      store = new_store
+      return True
+    return False
+
+  ctx = PatternMatcher(kernel_fusion, children, rev_children)
+
+  for out, chld in children.items():
+    pattern = kernel_fusion[0]
+    print(pattern, out)
+    x = _match(out, children, pattern[0], store:={})
+    if x: ret = pattern[1](**store, ctx=ctx)
+  print("------------")
 
   queue = [x for x in global_stores if in_degree[x] == 0]
   schedule: List[ScheduleItem] = []
