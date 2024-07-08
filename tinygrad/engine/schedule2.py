@@ -28,8 +28,8 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
 
 SCHEDULES: List = []
 def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
-  if DEBUG >= 2: print(colored(f"scheduling {outs}", "magenta"))
   global_stores = {x.base:None for x in outs if x.base.op is not LoadOps.CONST and x.base.realized is None}
+  if DEBUG >= 2: print(colored(f"scheduling {list(outs)}", "magenta"))
   assign_targets: Dict[LazyBuffer, LazyBuffer] = {}
   @functools.lru_cache(None)
   def _dfs_store(x:LazyBuffer):
@@ -39,11 +39,12 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
       return _dfs_store(x.base)
     for s in x.srcs: _dfs_store(s)
     if x.op in LoadOps or x.op in ReduceOps or x.forced_realize: global_stores[x] = None
+    if x.op is LoadOps.VIEW and x.srcs[0].base.realized is None: global_stores[x.srcs[0].base] = None
     if x.op is LoadOps.ASSIGN: assign_targets[x.srcs[1]] = x
+
   for x in outs: _dfs_store(x)
 
   rev_children = {x:lower_lazybuffer(x, global_stores) for x in global_stores}
-  # *** TODO: graph rewrite asts in rev_children
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
   in_degree: DefaultDict[LazyBuffer, int] = defaultdict(int)
   for buf, (_, inputs) in rev_children.items():
@@ -55,13 +56,17 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
         children[x][buf] = None
         in_degree[buf] += 1
 
+  def graph_rewrite(n:LazyBuffer) -> Tuple[Tuple[LazyOp, ...], List[LazyBuffer]]:
+    lop, inputs = rev_children[n]
+    return (lop, ), inputs
+
   queue = [x for x in global_stores if in_degree[x] == 0]
   schedule: List[ScheduleItem] = []
   while queue:
     n = queue.pop(0)
     del n.srcs
-    lop, inputs = rev_children[n]
-    schedule.append(ScheduleItem((lop,), (n.buffer,)+tuple(x.buffer for x in inputs)))
+    ast, inputs = graph_rewrite(n)
+    schedule.append(ScheduleItem(ast, (n.buffer,)+tuple(x.buffer for x in inputs)))
     if getenv("DEBUG_TOPOSORT"): print(colored(n, "green"))
     for x in children[n]:
       in_degree[x] -= 1
