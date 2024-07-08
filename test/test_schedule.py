@@ -567,6 +567,16 @@ class TestSchedule(unittest.TestCase):
     np.testing.assert_allclose(out2.numpy(), out0_np*out1_np, atol=1e-4, rtol=1e-6)
 
   # multireduce spec
+  def test_reduce_same_size_alt(self):
+    Tensor.manual_seed(0)
+    a = Tensor.randn(4, 4).realize()
+    out0 = a.sum() + 2
+    out1 = a.sum() + 4
+    run_schedule(check_schedule([out0, out1], 1))
+    np.testing.assert_allclose(out0.numpy(), a.numpy().sum()+2, atol=1e-4, rtol=1e-6)
+    np.testing.assert_allclose(out1.numpy(), a.numpy().sum()+4, atol=1e-4, rtol=1e-6)
+
+  # multireduce spec
   def test_reduce_multiple_paths(self):
     Tensor.manual_seed(0)
     a = Tensor.randn(4, 4).realize()

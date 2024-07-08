@@ -1,6 +1,7 @@
 from __future__ import annotations
 import functools, pickle, atexit
 from collections import defaultdict
+from dataclasses import replace
 from typing import DefaultDict, Dict, List, Tuple, cast
 
 from tinygrad.engine.schedule import ScheduleItem
@@ -41,7 +42,6 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
     if x.op in LoadOps or x.op in ReduceOps or x.forced_realize: global_stores[x] = None
     if x.op is LoadOps.VIEW and x.srcs[0].base.realized is None: global_stores[x.srcs[0].base] = None
     if x.op is LoadOps.ASSIGN: assign_targets[x.srcs[1]] = x
-
   for x in outs: _dfs_store(x)
 
   rev_children = {x:lower_lazybuffer(x, global_stores) for x in global_stores}
@@ -55,22 +55,51 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
       elif x.realized is None:
         children[x][buf] = None
         in_degree[buf] += 1
+      del buf.srcs
 
-  def graph_rewrite(n:LazyBuffer) -> Tuple[Tuple[LazyOp, ...], List[LazyBuffer]]:
-    lop, inputs = rev_children[n]
-    return (lop, ), inputs
+  def graph_rewrite(n:LazyBuffer) -> Tuple[List[LazyOp], List[LazyBuffer], List[LazyBuffer]]:
+    (lop, inputs) = rev_children[n]
+    tr_next: List[LazyBuffer] = []
+    for tr in children[n]:
+      in_degree[tr] -= 1
+      if in_degree[tr] == 0: tr_next.append(tr)
+    if n.op in LoadOps: return [lop], [n]+inputs, tr_next
+    outputs = [n]
+    for tr in tr_next.copy():
+      if tr.op in LoadOps: continue
+      # TODO: real matcher!
+      outputs.append(tr)
+      tr_next.remove(tr)
+    if len(outputs) == 1: return [lop], [n]+inputs, tr_next
+    ast: List[LazyOp] = []
+    allbufs = {x:i for i,x in enumerate(outputs)}
+    if reduceops:=[x for x in outputs if x.op in ReduceOps]:
+      output_st = ShapeTracker.from_shape(reduceops[0].st.shape)
+    else: output_st = ShapeTracker.from_shape(outputs[0].shape)
+    for i,out in enumerate(outputs):
+      print(f"-> {out.op}")
+      lop, inputs = rev_children[out]
+      @functools.lru_cache(None)
+      def _recursive_rewrite(lop:LazyOp, st:ShapeTracker) -> LazyOp:
+        src, arg = tuple([_recursive_rewrite(x, st) for x in lop.src]), lop.arg
+        if lop.op in BufferOps:
+          if lop.op is BufferOps.LOAD:
+            if (buf:=inputs[lop.arg.idx-1]) in outputs: return _recursive_rewrite(rev_children[buf][0], st)
+            arg = replace(lop.arg, idx=allbufs.setdefault(buf, len(allbufs)), st=st)
+          if lop.op is BufferOps.STORE: arg = replace(lop.arg, idx=i, st=st)
+          else: arg = replace(lop.arg, st=st)
+        return replace(lop, src=src, arg=arg)
+      lop = _recursive_rewrite(lop, output_st)
+      ast.append(lop)
+    return ast, list(allbufs), tr_next
 
   queue = [x for x in global_stores if in_degree[x] == 0]
   schedule: List[ScheduleItem] = []
   while queue:
     n = queue.pop(0)
-    del n.srcs
-    ast, inputs = graph_rewrite(n)
-    schedule.append(ScheduleItem(ast, (n.buffer,)+tuple(x.buffer for x in inputs)))
-    if getenv("DEBUG_TOPOSORT"): print(colored(n, "green"))
-    for x in children[n]:
-      in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append(x)
+    ast, allbufs, tr_next = graph_rewrite(n)
+    schedule.append(ScheduleItem(tuple(ast), tuple([x.buffer for x in allbufs])))
+    queue.extend(tr_next)
 
   if SAVE_SCHEDULE:
     def _save():
@@ -79,7 +108,6 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
     if len(SCHEDULES) == 0: atexit.register(_save)
     SCHEDULES.extend([(children, rev_children)])
 
-  if len(schedule) != len(global_stores) or any(d != 0 for d in in_degree.values()):
-    raise RuntimeError(f"cycle detected in graph {len(schedule)} != {len(global_stores)}")
+  if left_out:=dict(filter(lambda x:x[1]!=0, in_degree.items())): raise RuntimeError(f"some realizes never realized: {left_out}")
   if DEBUG >= 1 and len(schedule) >= 10: print(f"scheduled {len(schedule)} kernels")
   return schedule, {}
