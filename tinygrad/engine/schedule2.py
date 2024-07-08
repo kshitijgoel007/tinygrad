@@ -1,10 +1,10 @@
 from __future__ import annotations
+import functools, pickle, atexit
 from collections import defaultdict
-import functools
 from typing import DefaultDict, Dict, List, Tuple, cast
 
 from tinygrad.engine.schedule import ScheduleItem
-from tinygrad.helpers import DEBUG, colored, getenv, prod
+from tinygrad.helpers import DEBUG, SAVE_SCHEDULE, colored, getenv, prod
 from tinygrad.lazy import LazyBuffer
 from tinygrad.ops import BufferOps, ConstBuffer, LazyOp, LoadOps, MemBuffer, Op, ReduceOps
 from tinygrad.shape.shapetracker import ShapeTracker
@@ -26,8 +26,9 @@ def lower_lazybuffer(out:LazyBuffer, global_stores:Dict[LazyBuffer, None]) -> Tu
     return LazyOp(BufferOps.STORE, (lop, ), MemBuffer(0, x.dtype, output_st)) if x is out else lop
   return _dfs(out, out.st, out.st), list(inputs)
 
+SCHEDULES: List = []
 def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
-  if DEBUG >= 3: print(colored(f"scheduling {outs}", "yellow"))
+  if DEBUG >= 2: print(colored(f"scheduling {outs}", "magenta"))
   global_stores = {x.base:None for x in outs if x.base.op is not LoadOps.CONST and x.base.realized is None}
   assign_targets: Dict[LazyBuffer, LazyBuffer] = {}
   @functools.lru_cache(None)
@@ -65,6 +66,13 @@ def create_schedule(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem], Dict[Var
     for x in children[n]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
+
+  if SAVE_SCHEDULE:
+    def _save():
+      print(f"saving {len(SCHEDULES)} schedule graphs to", fp:=getenv("SAVE_SCHEDULE_PATH", "schedule.pkl"))
+      with open(fp, "wb") as f: pickle.dump(SCHEDULES, f)
+    if len(SCHEDULES) == 0: atexit.register(_save)
+    SCHEDULES.extend([(children, rev_children)])
 
   if len(schedule) != len(global_stores) or any(d != 0 for d in in_degree.values()):
     raise RuntimeError(f"cycle detected in graph {len(schedule)} != {len(global_stores)}")
