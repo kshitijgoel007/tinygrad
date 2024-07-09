@@ -320,8 +320,8 @@ def create_schedule_with_vars(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem]
   if DEBUG >= 1 and len(schedule) >= 10: print(f"scheduled {len(schedule)} kernels")
   return schedule, var_vals
 
-def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> List[ScheduleItem]:
-  schedule, var_vals = create_schedule_with_vars(outs, seen)
+def create_schedule(outs:List[LazyBuffer]) -> List[ScheduleItem]:
+  schedule, var_vals = create_schedule_with_vars(outs)
   assert len(var_vals) == 0
   return schedule
 
