@@ -101,6 +101,13 @@ class TestLinearizer(unittest.TestCase):
     assert len(mutable_bufs) == len(stores) == 2
     assert [u.arg[0] for u in mutable_bufs] == [0, 1]
 
+  def test_var_multireduce(self):
+    x = Tensor.randn(3, 27, 32).realize()
+    with Context(DEBUG_MOVEMENT=1): y_tiny = x.var(axis=2, correction=0)
+    # early_st = ShapeTracker.from_shape(x.shape).expand()
+    y_np = x.numpy().var(axis=2, ddof=0)
+    np.testing.assert_allclose(y_tiny.numpy(), y_np, atol=1e-4, rtol=1e-4)
+
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.has_local, "test requires locals")
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.has_shared, "test requires shared")
   def test_end_local(self):
