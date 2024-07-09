@@ -93,8 +93,7 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], outputs:Tuple[Laz
     LazyOp(buf.op, tuple(_recursive_lazyop(x, inputs, outputs, var_vals, st, realizes, assign_targets, cache) for x in buf.srcs), buf.arg)
   return ret
 
-def _lower_lazybuffer(outs:List[LazyBuffer], realizes:Dict[LazyBuffer, None],\
-    reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Tuple[Tuple[LazyOp, ...], List[LazyBuffer], Dict, List]:
+def _lower_lazybuffer(outs:List[LazyBuffer], realizes:Dict[LazyBuffer, None], reduce_for_op:Dict[LazyBuffer, LazyBuffer]):
   """describe the computation for a LazyBuffer with LazyOp + inputs + var_vals"""
   if (out:=outs[0]).op is LoadOps.COPY and getenv("USE_COPY_KERNEL") and out.device.split(":")[0] == out.srcs[0].device.split(":")[0]:
     rd = LazyOp(BufferOps.LOAD, (), MemBuffer(1, dtypes.uint8, st:=ShapeTracker.from_shape((out.arg,))))
@@ -266,7 +265,7 @@ def _graph_schedule(outs:List[LazyBuffer]):
         buf.buffer.options = None
 
   # preschedule all buffers in realizes
-  prescheduled = {group[0]:(group, *_lower_lazybuffer(group, realizes, reduce_for_op)) for group in output_groups.values()}
+  prescheduled = {group[0]:(group, )+_lower_lazybuffer(group, realizes, reduce_for_op) for group in output_groups.values()}
   schedule_targets = {out:ps for ps in prescheduled.values() for out in ps[0]}
 
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)

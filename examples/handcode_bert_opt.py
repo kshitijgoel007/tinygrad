@@ -16,7 +16,6 @@ if __name__ == "__main__":
     dtypes.default_float = dtypes.half
 
   mdl = get_mlperf_bert_model()
-  seen = set()
 
   # the device we are optimizing for
   device: Compiled = Device[Device.DEFAULT]
@@ -45,7 +44,7 @@ if __name__ == "__main__":
       # ignore grad norm and loss scaler for now
       loss.backward()
       targets += [x.lazydata for x in optim.schedule_step()]
-    sched = create_schedule(targets, seen)
+    sched = create_schedule(targets)
     print(f"schedule length {len(sched)}")
   sched = [x for x in sched if x.ast[0].op not in LoadOps]
 
